@@ -1,0 +1,64 @@
+use Data::Dumper;
+
+my %terminals;
+
+sub tmuxcc_create_terminal {
+	my $id=shift;
+	if ($id =~ m/(\d+)/) {
+		warn "Creating terminal with id ".$1;
+		$terminals{$1} = new urxvt::term ('FOO'=>'BAR'), '', qw/-e sleep 5/;
+	}
+}
+
+sub tmuxcc_set_terminal_layout {
+	warn shift;
+}
+
+sub tmuxcc_output_to_terminal {
+	my ($id, $output) = split(' ',shift,2);
+	if ($id =~ m/(\d+)/) {
+		warn "Outputting to terminal with id ".$1;
+		$terminals{$1}->cmd_parse($output);
+	}
+}
+sub tmuxcc_session_changed {
+	warn "entered tmuxcc_session_changed";
+	warn shift;
+}
+
+my %hooks = (
+	'%output' => \&tmuxcc_output_to_terminal,
+	'%session-changed' => \&tmuxcc_session_changed,
+	'%window-add' => \&tmuxcc_create_terminal,
+);
+
+warn $hooks{'output'};
+sub on_add_lines {
+	shift;
+	foreach (split(/\r\n/,shift)) {
+		if (substr($_,0,1) eq '%') {
+			chomp;
+			my ($cmd, $arg) = split(' ',$_,2);
+			warn "Got command '$cmd', args: '$arg'";
+			if ($hooks{$cmd}) {
+				warn $hooks{$cmd}->($arg);	
+			} else {
+				warn "No hook found for ".$cmd;
+			}
+		}
+	}
+	()
+}
+
+my $s="
+__DATA__
+urxvt: %end 1503976192 431 0
+urxvt: %window-pane-changed @10 %10
+urxvt: %window-add @10
+urxvt: %session-window-changed $10 @10
+urxvt: %sessions-changed
+urxvt: %session-changed $10 10
+urxvt: %layout-change @10 595f,80x24,0,0,10 595f,80x24,0,0,10 *
+urxvt: %output %10 \033[1m\033[3m%\033[23m\033[1m\033[0m                                                                               \015 \015\033]83;title zsh\007
+urxvt: %output %10 \015\033[0m\033[23m\033[24m\033[Jext % \033[K\033[?2004h
+";

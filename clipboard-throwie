@@ -1,0 +1,33 @@
+#! perl
+
+=head1 NAME
+
+osb-throwie-copy - copies osc throwie data to clipboard
+
+issue a copy using: printf "\033]777;throwie;copy;tar xzvf <(base64 -d<<<";tar --numeric-owner - -- Wayback\ Machine.html|gzip -9|base64 -w0;printf ")\007"
+
+=head1 SYNOPSIS
+
+   urxvt -pe clipboard-osc
+
+=head1 DESCRIPTION
+
+This extension implements the clipboard;copy Perl OSC.
+
+=cut
+
+
+sub on_osc_seq_perl {
+   my ($self, $osc, $resp) = @_;
+
+   warn("Got osc: ",$osc);
+   return unless $osc =~ s/^throwie;([^;]+);//;
+
+   if ($1 eq "copy") {
+	   warn("Got command ",$1);
+      $self->selection_grab (urxvt::CurrentTime, 0);
+      $self->selection ($osc, 0);
+   }
+
+   1
+}

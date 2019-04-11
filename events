@@ -1,0 +1,76 @@
+#! perl
+
+=head1 NAME
+
+osb-throwie-copy - copies osc throwie data to clipboard
+
+issue a copy using: printf "\033]777;throwie;copy;tar xzvf <(base64 -d<<<";tar --numeric-owner - -- Wayback\ Machine.html|gzip -9|base64 -w0;printf ")\007"
+
+=head1 SYNOPSIS
+
+   urxvt -pe clipboard-osc
+
+=head1 DESCRIPTION
+
+This extension implements the clipboard;copy Perl OSC.
+
+=cut
+
+use Data::Dumper;
+
+my $term = $urxvt::TERM;
+$urxvt::TERM->vt_emask_add (urxvt::PointerMotionMask);
+
+my $overlay;
+my %retvals;
+my $sc=0;
+my $lrow=undef;
+
+sub on_motion_notify($$) {
+	my ($term, $event) = @_;
+	#	warn((caller(0))[3]."(): ".Dumper(\@_));
+	#warn(Dumper \$event);#->{'row'});
+	#warn(Dumper $event->{'row'});
+	
+	if (defined($retvals{$event->{'row'}}) and $lrow!=$event->{'row'}) {
+		my $line = $term->line ($event->{'row'});
+		my ($row, $col) = $line->coord_of (0);
+		warn("event row: ".$event->{'row'}.", row=$row, sc=$sc");
+		$overlay = $term->overlay(-22, $row, 20, 1, urxvt::OVERLAY_RSTYLE, 1);
+		$overlay->set(0, 0, " Retval: ".$retvals{$event->{'row'}});
+		$lrow=$event->{'row'};
+	   warn(Dumper $line->ROW_t);
+	} elsif (defined($overlay) and $lrow!=$event->{'row'}) {
+		warn("terminating");
+		undef $overlay;
+		undef $lrow;
+	}
+#	$term->{timer} = urxvt::timer->new->after (6)->cb (sub {
+#		delete $term->{timer};
+#		undef $overlay;
+#	});
+	return ();
+	1;
+}
+
+sub on_scroll_back($$$) {
+	my ($term, $lines, $saved) = @_;
+	$sc-=$lines;
+	warn(Dumper [$lines, $saved]);
+	1;
+}
+
+sub on_osc_seq_perl {
+   my ($self, $osc, $resp) = @_;
+   my ($row, $col) = $term->screen_cur;
+
+   warn("Got osc: ",$osc);
+   warn("row=$row, col=$col, osc=$osc, nrow=".$self->nrow);
+   my $line = $term->line ($row);
+   warn(Dumper $line->r);
+   return unless $osc =~ s/^endcode;(.+?);//;
+   $retvals{$row+$sc}=$1;
+   warn(Dumper \%retvals);
+
+   ();
+}

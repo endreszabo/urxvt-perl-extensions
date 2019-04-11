@@ -1,0 +1,104 @@
+#! perl
+
+=head1 NAME
+
+selection-infowindow
+
+=head1 DESCRIPTION
+
+Shows an overlay upon active selection with char/word/sentence/line counts
+of the selection contents.
+
+=cut
+
+use List::Util qw/reduce/;
+
+sub msg {
+	my ($self, @msg) = @_;
+	my $width=length(longest_str(@msg));
+
+	my $overlay = $self->overlay (0-$width-5, 1, $width+2, $#msg+1, urxvt::OVERLAY_RSTYLE, 2);
+
+	my $index=0;
+	foreach my $string (@msg) {
+		$overlay->set(1, $index++, $string);
+	}
+
+	#set removal timer
+	$self->{timer} = urxvt::timer->new->after (6)->cb (sub {
+		delete $self->{timer};
+		undef $overlay;
+	});
+}
+
+sub on_start {
+	my ($self) = @_;
+
+	()
+}
+
+sub min_max_avg_tot {
+	# https://www.perlmonks.org/?node_id=507346
+	my $res = reduce {
+		my $r= ref $a ? $a : [($a) x 3];
+		if ($b < $r->[0]) {
+			$r->[0]= $b;
+		} elsif ($b > $r->[1]) {
+			$r->[1]= $b;
+		}
+		$r->[2]+=$b;
+		$r
+	} @_;
+
+	return @$res[0,1], $res->[2] / @_, $res->[2];
+}
+
+sub on_sel_grab {
+	my ($self, $time) = @_;
+	$_=$self->selection;
+	my @stats=stats($_);
+	$self->msg(@stats);
+	()
+}
+
+sub longest_str {
+	# https://stackoverflow.com/questions/4182010/the-fastest-way-execution-time-to-find-the-longest-element-in-an-list
+    my $max = -1;
+    my $max_ref;
+    for (@_) {
+        if (length > $max) {  # no temp variable, length() twice is faster
+            $max = length;
+            $max_ref = \$_;   # avoid any copying
+        }
+    }
+    $$max_ref
+}
+
+sub stats($) {
+	my @rv; my $offset = 6; my $noffset = 11;
+
+	push(@rv, '- string stats -');
+    my $length = length($_);
+	push(@rv, sprintf("%".$offset."d bytes", $length)) if $length;
+    my $chars = scalar(split(/\S/,$_));
+	push(@rv, sprintf("%".$offset."d chars", $chars)) if $chars;
+    my $words = scalar(split(/\W+/, $_));
+	push(@rv, sprintf("%".$offset."d words", $words)) if $words;
+    my $sents = scalar(split("/\.( |\$)/", $_));
+	push(@rv, sprintf("%".$offset."d sents", $sents)) if $sents;
+    my $lines = scalar(split("\n", $_));
+	push(@rv, sprintf("%".$offset."d lines", $lines)) if $lines;
+	my @numbers = $_ =~ /([-+]?[0-9]*\.?[0-9]+)/g;
+	if ($#numbers>0) {
+		@numbers = min_max_avg_tot(@numbers);
+		#$noffset = length($numbers[3])+1;
+		push(@rv, '');
+		push(@rv, '- number stats -');
+		push(@rv, sprintf("min: %".$noffset.".2f", $numbers[0]));
+		push(@rv, sprintf("max: %".$noffset.".2f", $numbers[1]));
+		push(@rv, sprintf("avg: %".$noffset.".2f", $numbers[2]));
+		push(@rv, sprintf("sum: %".$noffset.".2f", $numbers[3]));
+	}
+	return @rv;
+}
+

@@ -1,0 +1,35 @@
+#! perl
+
+=head1 NAME
+
+selection-prepend-no - prepend selected text with 'no '
+
+=head1 DESCRIPTION
+
+This is a little rarely useful extension that prepends the selection text
+with 'no ' for use with Cisco like CLIs.
+
+=cut
+
+sub on_start {
+   my ($self) = @_;
+
+   push @{ $self->{term}{selection_popup_hook} }, sub {
+      ("prepend 'no ' for Cisco CLI" => sub { $_ = 'no '.join("\nno ",split(/\n/))."\n" })
+   };
+
+   ()
+}
+
+sub on_user_command {
+   my ($self, $cmd) = @_;
+
+   ()
+}
+
+sub on_action {
+   my ($self, $action) = @_;
+
+   ()
+}
+

@@ -1,0 +1,94 @@
+#! perl
+
+use Data::Dumper;
+
+use X11::Protocol 0.56;
+use X11::Protocol::Constants qw/ Shift Mod5 ShiftMask /;
+use X11::Protocol::WM 29;
+use X11::Keysyms '%keysymtocode', 'MISCELLANY', 'XKB_KEYS', '3270', 'LATIN1',
+    'LATIN2', 'LATIN3', 'LATIN4', 'KATAKANA', 'ARABIC', 'CYRILLIC', 'GREEK',
+    'TECHNICAL', 'SPECIAL', 'PUBLISHING', 'APL', 'HEBREW', 'THAI', 'KOREAN';
+use Symbol qw/ gensym /;
+
+my %windows;    # hash for all window definitions
+my %menus;      # hash for all menu definitions
+
+my $X;
+my %keyboardmap;
+
+
+my $X=undef;
+my $em;
+
+sub on_start {
+	print Dumper \@_;
+	$X = X11::Protocol->new();
+
+	$em = $X->pack_event_mask('KeyPress', 'KeyRelease');
+
+    if ( !$X ) {
+        die("Failed to get X connection\n");
+    }
+
+	return ();
+}
+
+sub send_event {
+	my $tgtevt=shift;
+	my $event_string = $X->pack_event(%$tgtevt);
+
+	print Dumper \$tgtevt;
+	print $X->SendEvent( 33561737, 0, $em, $event_string);
+	$X->flush();
+	return 1;
+}
+
+my $s=0;
+sub on_key_release {
+	my ($term, $event, $keysym, $octets) = @_;
+	my %tgtevt;
+
+	$tgtevt{'name'} = 'KeyRelease';
+	$tgtevt{'event'} = 33561737;
+	$tgtevt{'detail'} = %$event{'keycode'};
+	$tgtevt{'state'} = %$event{'state'};
+	$tgtevt{'code'} = 2;#%$event{'type'};
+	$tgtevt{'event_x'} = %$event{'x'};
+	$tgtevt{'event_y'} = %$event{'y'};
+	$tgtevt{'same_screen'} = 1,
+	$tgtevt{'root'} = $X->{'root'};
+	$tgtevt{'child'}        = 'None';
+	$tgtevt{'time'} = time();
+	$tgtevt{'root_x'} = %$event{'x_root'};
+	$tgtevt{'root_y'} = %$event{'y_root'};
+	$s+=1;
+	$tgtevt{'sequence_number'} = $s;
+
+	#send_event(\%tgtevt);
+
+}
+sub on_key_press {
+	my ($term, $event, $keysym, $octets) = @_;
+	my %tgtevt;
+
+	$tgtevt{'name'} = 'KeyPress';
+	$tgtevt{'event'} = 33561737;
+	$tgtevt{'detail'} = %$event{'keycode'};
+	$tgtevt{'state'} = %$event{'state'};
+	$tgtevt{'code'} = 2;#%$event{'type'};
+	$tgtevt{'event_x'} = %$event{'x'};
+	$tgtevt{'event_y'} = %$event{'y'};
+	$tgtevt{'same_screen'} = 1,
+	$tgtevt{'root'} = $X->{'root'};
+	$tgtevt{'child'}        = 'None';
+	$tgtevt{'time'} = time();
+	$tgtevt{'root_x'} = %$event{'x_root'};
+	$tgtevt{'root_y'} = %$event{'y_root'};
+	$s+=1;
+	$tgtevt{'sequence_number'} = $s;
+	#$tgtevt{'sequence_number'} = %$event{'serial'};
+
+	send_event(\%tgtevt);
+
+    return 1;
+}

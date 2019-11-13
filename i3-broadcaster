@@ -19,19 +19,48 @@ use AnyEvent::I3 qw(:all);
  
 my $i3 = i3();
 
-my $X=undef;
 my $em;
 
 
 my $wid;
+$|=1;
 
-sub i3_recv_workspaces {
-	print Dumper(\@_);
-	my $workspaces = $_[0]->recv;
-	print "Parent ID", $wid, "\n";
-	print "Workspaces", Dumper(@{$workspaces});
+sub is_candidate($) {
+	my $node = shift;
+}
+
+sub is_us($) {
+	my %node = %{$_[0]};
+	return ($node{'window'} == $wid);
+}
+
+sub parse_node($$) {
+	my %node = %{$_[0]};
+	my $receivers = $_[1];
+	print($node{'window_properties'}{'instance'}," ", $node{'window_properties'}{'class'},"\n");
+	foreach my $child (@{$node{'nodes'}}) {
+		parse_node($child, \$receivers);
+	};
+	printf("endpoint found: %s\n", $node{'window_properties'}{'instance'});
+	print(is_us(\%node));
+}
+
+sub i3_recv_tree {
+	my %tree = %{$_[0]->recv};
+	my $new_receivers=[];
+	parse_node(\%tree, \$new_receivers);
+
+	#	print Dumper(\$tree);
 
 }
+
+sub i3_recv_workspaces {
+	$i3->get_tree->cb(\&i3_recv_tree);
+
+	#my $workspaces = $_[0]->recv;
+
+}
+
 sub on_start {
 	#	print Dumper \@_;
 	$X = X11::Protocol->new();
@@ -46,6 +75,7 @@ sub on_start {
 		#my $workspaces = $i3->message(TYPE_GET_WORKSPACES);
 		#$workspaces->cb(\&i3_recv_workspaces);
 		$i3->subscribe({'workspace'=>\&i3_recv_workspaces});
+		$i3->subscribe({'window'=>\&i3_recv_workspaces});
 
 		});
 	#$workspaces->send;
@@ -62,8 +92,9 @@ sub send_event {
 	my $tgtevt=shift;
 	my $event_string = $X->pack_event(%$tgtevt);
 
-	print Dumper \$tgtevt;
-	print $X->SendEvent( 0x1c00272, 0, $em, $event_string);
+	#print Dumper \$tgtevt;
+	#ljlj
+	#print $X->SendEvent( 0x600041, 0, $em, $event_string);
 	$X->flush();
 	return 1;
 }
@@ -74,7 +105,7 @@ sub on_key_release {
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyRelease';
-	$tgtevt{'event'} = 0x1c00272;
+	$tgtevt{'event'} = 0x2002629;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};
@@ -97,7 +128,7 @@ sub on_key_press {
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyPress';
-	$tgtevt{'event'} = 0x1c00272;
+	$tgtevt{'event'} = 0x600041;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};

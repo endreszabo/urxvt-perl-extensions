@@ -15,16 +15,41 @@ my %menus;      # hash for all menu definitions
 
 my $X;
 my %keyboardmap;
-
+use AnyEvent::I3 qw(:all);
+ 
+my $i3 = i3();
 
 my $X=undef;
 my $em;
 
+
+my $wid;
+
+sub i3_recv_workspaces {
+	print Dumper(\@_);
+	my $workspaces = $_[0]->recv;
+	print "Parent ID", $wid, "\n";
+	print "Workspaces", Dumper(@{$workspaces});
+
+}
 sub on_start {
-	print Dumper \@_;
+	#	print Dumper \@_;
 	$X = X11::Protocol->new();
+	my($self)=@_;
+	$wid = $self->parent;
 
 	$em = $X->pack_event_mask('KeyPress', 'KeyRelease');
+
+	my $cv = $i3->connect;
+	$cv->cb (sub {
+		#print("I3 connected", Dumper($_[0]->recv, $cv, $i3));
+		#my $workspaces = $i3->message(TYPE_GET_WORKSPACES);
+		#$workspaces->cb(\&i3_recv_workspaces);
+		$i3->subscribe({'workspace'=>\&i3_recv_workspaces});
+
+		});
+	#$workspaces->send;
+#	$cv->send;
 
     if ( !$X ) {
         die("Failed to get X connection\n");
@@ -38,7 +63,7 @@ sub send_event {
 	my $event_string = $X->pack_event(%$tgtevt);
 
 	print Dumper \$tgtevt;
-	print $X->SendEvent( 33561737, 0, $em, $event_string);
+	print $X->SendEvent( 0x1c00272, 0, $em, $event_string);
 	$X->flush();
 	return 1;
 }
@@ -49,7 +74,7 @@ sub on_key_release {
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyRelease';
-	$tgtevt{'event'} = 33561737;
+	$tgtevt{'event'} = 0x1c00272;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};
@@ -72,7 +97,7 @@ sub on_key_press {
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyPress';
-	$tgtevt{'event'} = 33561737;
+	$tgtevt{'event'} = 0x1c00272;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};

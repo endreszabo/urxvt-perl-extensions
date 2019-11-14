@@ -8,6 +8,14 @@ use X11::Protocol::WM 29;
 use X11::Keysyms '%keysymtocode', 'MISCELLANY', 'XKB_KEYS', '3270', 'LATIN1',
     'LATIN2', 'LATIN3', 'LATIN4', 'KATAKANA', 'ARABIC', 'CYRILLIC', 'GREEK',
     'TECHNICAL', 'SPECIAL', 'PUBLISHING', 'APL', 'HEBREW', 'THAI', 'KOREAN';
+use vars qw/ %keysymtocode %keycodetosym /;
+$keysymtocode{unknown_sym} = 0xFFFFFF;    # put in a default "unknown" entry
+$keysymtocode{EuroSign}
+    = 0x20AC;    # Euro sign - missing from X11::Protocol::Keysyms
+
+# and also map it the other way
+%keycodetosym = reverse %keysymtocode;
+
 use Symbol qw/ gensym /;
 
 my %windows;    # hash for all window definitions
@@ -18,15 +26,21 @@ my %keyboardmap;
 use AnyEvent::I3 qw(:all);
  
 my $i3 = i3();
+my $s=0;
+use List::Util qw(first);
+
 
 my $em;
-
+my @targets;
 
 my $wid;
+#my $twid=0x600553;
+
 $|=1;
 
 sub is_candidate($) {
-	my $node = shift;
+	my %node = %{$_[0]};
+	return $node{'window_properties'}{'instance'} eq 'wssh';
 }
 
 sub is_us($) {
@@ -37,18 +51,29 @@ sub is_us($) {
 sub parse_node($$) {
 	my %node = %{$_[0]};
 	my $receivers = $_[1];
-	print($node{'window_properties'}{'instance'}," ", $node{'window_properties'}{'class'},"\n");
-	foreach my $child (@{$node{'nodes'}}) {
-		parse_node($child, \$receivers);
-	};
-	printf("endpoint found: %s\n", $node{'window_properties'}{'instance'});
-	print(is_us(\%node));
+	#print ref $node{'nodes'};
+	#print(Dumper(%node));#{'window_properties'}));
+	#print(length($node{'nodes'}),$node{'nodes'}[0],"\n");
+	if (scalar @{$node{'nodes'}}>0) {
+		printf ("Found branch %s\n", $node{'name'});
+		foreach my $child (@{$node{'nodes'}}) {
+			parse_node($child, \$receivers);
+		};
+	} else {
+		printf ("Found leaf %s\n", $node{'name'});
+		if (is_candidate(\%node)) {
+			push(@targets, $node{'window'});
+		}
+		print(is_us(\%node));
+	}
 }
 
 sub i3_recv_tree {
 	my %tree = %{$_[0]->recv};
 	my $new_receivers=[];
+	@targets=[];
 	parse_node(\%tree, \$new_receivers);
+	print ("Targets: ", Dumper \@targets);
 
 	#	print Dumper(\$tree);
 
@@ -69,6 +94,7 @@ sub on_start {
 
 	$em = $X->pack_event_mask('KeyPress', 'KeyRelease');
 
+	load_keyboard_map($self);
 	my $cv = $i3->connect;
 	$cv->cb (sub {
 		#print("I3 connected", Dumper($_[0]->recv, $cv, $i3));
@@ -89,23 +115,184 @@ sub on_start {
 }
 
 sub send_event {
-	my $tgtevt=shift;
-	my $event_string = $X->pack_event(%$tgtevt);
-
-	#print Dumper \$tgtevt;
-	#ljlj
-	#print $X->SendEvent( 0x600041, 0, $em, $event_string);
+	my %tgtevt = %{$_[0]}; shift;
+	my $twid = shift;
+	foreach my $target (@targets) {
+		$tgtevt{'event'}=$target;
+		my $event_string = $X->pack_event(%tgtevt);
+		print $X->SendEvent( $target, 0, $em, $event_string);
+	}
 	$X->flush();
 	return 1;
 }
 
-my $s=0;
+sub debug {
+	return ();
+}
+sub load_keyboard_map() { my ($self) = @_; # load up the keyboard map to convert keysyms to keyboardmap
+    my $min      = $X->{min_keycode};
+    my $count    = $X->{max_keycode} - $min;
+    my @keyboard = $X->GetKeyboardMapping( $min, $count );
+
+    # @keyboard arry
+    #  0 = plain key
+    #  1 = with shift
+    #  2 = with Alt-GR
+    #  3 = with shift + AltGr
+    #  4 = same as 2 - control/alt?
+    #  5 = same as 3 - shift-control-alt?
+
+    debug( 1, "Loading keymaps and keycodes" );
+
+    my %keyboard_modifier_priority = (
+        'sa' => 3,    # lowest
+        'a'  => 2,
+        's'  => 1,
+        'n'  => 0,    # highest
+    );
+
+    my %keyboard_stringlike_modifiers = reverse %keyboard_modifier_priority;
+
+  # try to associate $keyboard=X11->GetKeyboardMapping table with X11::Keysyms
+    foreach my $i ( 0 .. $#keyboard ) {
+        for my $modifier ( 0 .. 3 ) {
+            if (   defined( $keyboard[$i][$modifier] )
+                && defined( $keycodetosym{ $keyboard[$i][$modifier] } ) )
+            {
+
+                # keyboard layout contains the keycode at $modifier level
+                if (defined(
+                        $keyboardmap{ $keycodetosym{ $keyboard[$i][$modifier]
+                        } }
+                    )
+                    )
+                {
+
+# we already have a mapping, let's see whether current one is better (lower shift state)
+                    my ( $mod_code, $key_code )
+                        = $keyboardmap{ $keycodetosym{ $keyboard[$i]
+                                [$modifier] } } =~ /^(\D+)(\d+)$/;
+
+      # it is not easy to get around our own alien logic storing modifiers ;-)
+                    if ( $modifier < $keyboard_modifier_priority{$mod_code} )
+                    {
+
+                     # YES! current keycode have priority over old one (phew!)
+                        $keyboardmap{ $keycodetosym{ $keyboard[$i][$modifier]
+                        } }
+                            = $keyboard_stringlike_modifiers{$modifier}
+                            . ( $i + $min );
+                    }
+                }
+                else {
+
+                    # we don't yet have a mapping... piece of cake!
+                    $keyboardmap{ $keycodetosym{ $keyboard[$i][$modifier] } }
+                        = $keyboard_stringlike_modifiers{$modifier}
+                        . ( $i + $min );
+                }
+            }
+            else {
+
+                # we didn't get the code from X11::Keysyms
+                if ( defined( $keyboard[$i][$modifier] )
+                    && $keyboard[$i][$modifier] != 0 )
+                {
+
+                    # ignore code=0
+                    debug(
+                        2,
+                        "Unknown keycode ",
+                        $keyboard[$i][$modifier]
+                    );
+                }
+            }
+        }
+    }
+
+    # don't know these two key combs yet...
+    #$keyboardmap{ $keycodetosym { $keyboard[$_][4] } } = $_ + $min;
+    #$keyboardmap{ $keycodetosym { $keyboard[$_][5] } } = $_ + $min;
+
+    #print "$_ => $keyboardmap{$_}\n" foreach(sort(keys(%keyboardmap)));
+    #print "keysymtocode: $keysymtocode{o}\n";
+    #die;
+}
+
+sub get_keycode_state($) {
+    my ( $keysym ) = @_;
+    $keyboardmap{$keysym} =~ m/^(\D+)(\d+)$/;
+	#print("Map: ", $keyboardmap{$keysym}, $1, $2, "\n");
+    my ( $state, $code ) = ( $1, $2 );
+
+    debug( 2, "keyboardmap=:", $keyboardmap{$keysym}, ":" );
+    debug( 2, "state=$state, code=$code" );
+
+SWITCH: for ($state) {
+        /^n$/ && do {
+            $state = 0;
+            last SWITCH;
+        };
+        /^s$/ && do {
+            $state = Shift();
+            last SWITCH;
+        };
+        /^a$/ && do {
+            $state = Mod5();
+            last SWITCH;
+        };
+        /^sa$/ && do {
+            $state = Shift() + Mod5();
+            last SWITCH;
+        };
+
+        die("Should never reach here");
+    }
+
+    debug( 2, "returning state=:$state: code=:$code:" );
+
+    return ( $state, $code );
+}
+
+sub on_tt_paste {
+	my ($term, $octets) = @_;
+	foreach my $char (split(//, $octets)) {
+        next if ( !defined($char) );
+        my $ord = ord($char);
+        $ord = 65293 if ( $ord == 10 );    # convert 'Return' to sym
+
+        if ( !defined( $keycodetosym{$ord} ) ) {
+            warn("Unknown character in xmodmap keytable: $char ($ord)\n");
+            next;
+        }
+        my $keysym  = $keycodetosym{$ord};
+        my $keycode = $keysymtocode{$keysym};
+
+		#print("keysym:", Dumper($char, $keysym, $ord, $keycodetosym{$ord}, $keycode));
+		#print("\n");
+        my ( $state, $code ) = get_keycode_state($keysym);
+		my %tgtevt;
+
+		$tgtevt{'name'} = 'KeyPress';
+		$tgtevt{'detail'} = $code,
+		$tgtevt{'state'} = $state,
+		$tgtevt{'same_screen'} = 1,
+		$tgtevt{'root'} = $X->{'root'};
+		$tgtevt{'child'}        = 'None';
+		$tgtevt{'time'} = time();
+		$s+=1;
+		$tgtevt{'sequence_number'} = $s;
+		send_event(\%tgtevt);
+	}
+
+	return 1;
+}
+
 sub on_key_release {
 	my ($term, $event, $keysym, $octets) = @_;
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyRelease';
-	$tgtevt{'event'} = 0x2002629;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};
@@ -121,14 +308,13 @@ sub on_key_release {
 	$tgtevt{'sequence_number'} = $s;
 
 	#send_event(\%tgtevt);
-
 }
+
 sub on_key_press {
 	my ($term, $event, $keysym, $octets) = @_;
 	my %tgtevt;
 
 	$tgtevt{'name'} = 'KeyPress';
-	$tgtevt{'event'} = 0x600041;
 	$tgtevt{'detail'} = %$event{'keycode'};
 	$tgtevt{'state'} = %$event{'state'};
 	$tgtevt{'code'} = 2;#%$event{'type'};
@@ -145,6 +331,7 @@ sub on_key_press {
 	#$tgtevt{'sequence_number'} = %$event{'serial'};
 
 	send_event(\%tgtevt);
+	#send_event(\%tgtevt);
 
     return 1;
 }

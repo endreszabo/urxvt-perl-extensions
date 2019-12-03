@@ -16,6 +16,7 @@ $keysymtocode{EuroSign}
 # and also map it the other way
 %keycodetosym = reverse %keysymtocode;
 
+my $myoption=0;
 use Symbol qw/ gensym /;
 
 my %windows;    # hash for all window definitions
@@ -38,40 +39,73 @@ my $wid;
 
 $|=1;
 
-sub is_candidate($) {
-	my %node = %{$_[0]};
-	return $node{'window_properties'}{'instance'} eq 'wssh';
-}
 
 sub is_us($) {
 	my %node = %{$_[0]};
-	return ($node{'window'} == $wid);
+	printf("Windows IDs: %s\t%s\n", $node{'window'}, $wid);
+	my $rv = ($node{'window'} eq $wid);
+	printf("rv is: %d\n", $rv);
+	return ($node{'window'} eq $wid);
 }
 
-sub parse_node($$) {
+sub is_candidate($) {
 	my %node = %{$_[0]};
-	my $receivers = $_[1];
+	return 0 if is_us(\%node);
+	return $node{'window_properties'}{'instance'} eq 'urxvt';
+	return $node{'window_properties'}{'instance'} eq 'wssh';
+}
+
+my $cw;
+
+sub parse_node {
+	my %node = %{$_[0]};
+	my $receivers = $_[1]; shift; shift;
+	my @parent = @_;
 	#print ref $node{'nodes'};
 	#print(Dumper(%node));#{'window_properties'}));
 	#print(length($node{'nodes'}),$node{'nodes'}[0],"\n");
 	if (scalar @{$node{'nodes'}}>0) {
 		printf ("Found branch %s\n", $node{'name'});
 		foreach my $child (@{$node{'nodes'}}) {
-			parse_node($child, \$receivers);
+			parse_node($child, \$receivers, @parent, \%node);
 		};
 	} else {
 		printf ("Found leaf %s\n", $node{'name'});
-		if (is_candidate(\%node)) {
+		printf ("Has parents: %s\n", join(',', map{$$_{'name'}} @parent));
+		printf ("Has ws: %s\n", ${$parent[3]}{'name'});
+		if (${$parent[3]}{'name'} eq $cw and is_candidate(\%node)) {
 			push(@targets, $node{'window'});
 		}
-		print(is_us(\%node));
+	}
+}
+
+sub find_us {
+	my %node = %{$_[0]};
+	my $receivers = $_[1]; shift; shift;
+	my @parent = @_;
+	#print ref $node{'nodes'};
+	#print(Dumper(%node));#{'window_properties'}));
+	#print(length($node{'nodes'}),$node{'nodes'}[0],"\n");
+	if (scalar @{$node{'nodes'}}>0) {
+		printf ("Found branch %s\n", $node{'name'});
+		foreach my $child (@{$node{'nodes'}}) {
+			find_us($child, \$receivers, @parent, \%node);
+		};
+	} else {
+		printf("**\n");
+		if (is_us(\%node)) {
+			$cw=${$parent[3]}{'name'};
+			return $cw;
+		}
 	}
 }
 
 sub i3_recv_tree {
 	my %tree = %{$_[0]->recv};
+	my $newd_receivers=[];
 	my $new_receivers=[];
 	@targets=[];
+	find_us(\%tree, \$newd_receivers);
 	parse_node(\%tree, \$new_receivers);
 	print ("Targets: ", Dumper \@targets);
 
@@ -84,6 +118,16 @@ sub i3_recv_workspaces {
 
 	#my $workspaces = $_[0]->recv;
 
+}
+
+sub on_enabled {
+
+}
+
+sub mode_toggle($$) {
+	my ($mode, $self) = @_;
+	printf("mode: %s\n",$mode);
+	$self->{myoption}=$mode;
 }
 
 sub on_start {
@@ -110,6 +154,10 @@ sub on_start {
     if ( !$X ) {
         die("Failed to get X connection\n");
     }
+
+	push @{ $self->{term}{option_popup_hook} }, sub {
+	   ("broadcast" => $myoption, \&mode_toggle, \$self)
+   };
 
 	return ();
 }

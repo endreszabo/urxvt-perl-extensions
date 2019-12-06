@@ -1,5 +1,8 @@
 #! perl
 
+#:META:RESOURCE:%.target_instances:string:X windows instance type of target windows
+
+
 use Data::Dumper;
 
 use X11::Protocol 0.56;
@@ -16,17 +19,18 @@ $keysymtocode{EuroSign}
 # and also map it the other way
 %keycodetosym = reverse %keysymtocode;
 
-my $myoption=0;
+
+my ($self, @target_instances);
+
 use Symbol qw/ gensym /;
 
 my %windows;    # hash for all window definitions
 my %menus;      # hash for all menu definitions
 
-my $X;
+#my $self->{'X11'};
 my %keyboardmap;
 use AnyEvent::I3 qw(:all);
  
-my $i3 = i3();
 my $s=0;
 use List::Util qw(first);
 
@@ -34,25 +38,18 @@ use List::Util qw(first);
 my $em;
 my @targets;
 
-my $wid;
-#my $twid=0x600553;
-
 $|=1;
-
 
 sub is_us($) {
 	my %node = %{$_[0]};
-	printf("Windows IDs: %s\t%s\n", $node{'window'}, $wid);
-	my $rv = ($node{'window'} eq $wid);
-	printf("rv is: %d\n", $rv);
-	return ($node{'window'} eq $wid);
+	my $rv = ($node{'window'} eq $self->parent);
+	return ($node{'window'} eq $self->parent);
 }
 
 sub is_candidate($) {
 	my %node = %{$_[0]};
-	return 0 if is_us(\%node);
-	return $node{'window_properties'}{'instance'} eq 'urxvt';
-	return $node{'window_properties'}{'instance'} eq 'wssh';
+	return 0 if is_us(\%node);  # avoid loopback
+	return 1 if (first {$_ eq $node{'window_properties'}{'instance'}} @target_instances);
 }
 
 my $cw;
@@ -61,18 +58,11 @@ sub parse_node {
 	my %node = %{$_[0]};
 	my $receivers = $_[1]; shift; shift;
 	my @parent = @_;
-	#print ref $node{'nodes'};
-	#print(Dumper(%node));#{'window_properties'}));
-	#print(length($node{'nodes'}),$node{'nodes'}[0],"\n");
 	if (scalar @{$node{'nodes'}}>0) {
-		printf ("Found branch %s\n", $node{'name'});
 		foreach my $child (@{$node{'nodes'}}) {
 			parse_node($child, \$receivers, @parent, \%node);
 		};
 	} else {
-		printf ("Found leaf %s\n", $node{'name'});
-		printf ("Has parents: %s\n", join(',', map{$$_{'name'}} @parent));
-		printf ("Has ws: %s\n", ${$parent[3]}{'name'});
 		if (${$parent[3]}{'name'} eq $cw and is_candidate(\%node)) {
 			push(@targets, $node{'window'});
 		}
@@ -83,16 +73,11 @@ sub find_us {
 	my %node = %{$_[0]};
 	my $receivers = $_[1]; shift; shift;
 	my @parent = @_;
-	#print ref $node{'nodes'};
-	#print(Dumper(%node));#{'window_properties'}));
-	#print(length($node{'nodes'}),$node{'nodes'}[0],"\n");
 	if (scalar @{$node{'nodes'}}>0) {
-		printf ("Found branch %s\n", $node{'name'});
 		foreach my $child (@{$node{'nodes'}}) {
 			find_us($child, \$receivers, @parent, \%node);
 		};
 	} else {
-		printf("**\n");
 		if (is_us(\%node)) {
 			$cw=${$parent[3]}{'name'};
 			return $cw;
@@ -101,86 +86,79 @@ sub find_us {
 }
 
 sub i3_recv_tree {
+	#	print ("I3 recv tree paramcs: ", Dumper(\@_));
 	my %tree = %{$_[0]->recv};
 	my $newd_receivers=[];
 	my $new_receivers=[];
-	@targets=[];
+	@targets=();
 	find_us(\%tree, \$newd_receivers);
 	parse_node(\%tree, \$new_receivers);
 	print ("Targets: ", Dumper \@targets);
-
-	#	print Dumper(\$tree);
-
 }
 
 sub i3_recv_workspaces {
-	$i3->get_tree->cb(\&i3_recv_tree);
-
-	#my $workspaces = $_[0]->recv;
-
+	$self->{'i3'}->get_tree->cb(\&i3_recv_tree, $self);
 }
 
-sub on_enabled {
+sub cb_enabled {
+	#initialize X11lib
+	$self->{'X11'} = X11::Protocol->new();
 
-}
+	$em = $self->{'X11'}->pack_event_mask('KeyPress');  # handling and broadcasting KeyRelease event results in double keypresses, somewhy
 
-sub mode_toggle($$) {
-	my ($mode, $self) = @_;
-	printf("mode: %s\n",$mode);
-	$self->{myoption}=$mode;
-}
+	load_keyboard_map();
 
-sub on_start {
-	#	print Dumper \@_;
-	$X = X11::Protocol->new();
-	my($self)=@_;
-	$wid = $self->parent;
+	#initialize i3 socket
+	$self->{'i3'} = i3();
+	$self->{'i3sock'} = $self->{'i3'}->connect;
 
-	$em = $X->pack_event_mask('KeyPress', 'KeyRelease');
-
-	load_keyboard_map($self);
-	my $cv = $i3->connect;
-	$cv->cb (sub {
-		#print("I3 connected", Dumper($_[0]->recv, $cv, $i3));
-		#my $workspaces = $i3->message(TYPE_GET_WORKSPACES);
-		#$workspaces->cb(\&i3_recv_workspaces);
-		$i3->subscribe({'workspace'=>\&i3_recv_workspaces});
-		$i3->subscribe({'window'=>\&i3_recv_workspaces});
+	$self->{'i3sock'}->cb (sub {
+		$self->{'i3'}->subscribe({'workspace'=>\&i3_recv_workspaces});
+		$self->{'i3'}->subscribe({'window'=>\&i3_recv_workspaces});
 
 		});
-	#$workspaces->send;
-#	$cv->send;
+	$self->{'cb_ref'} = $self->enable(
+		key_press => \&cb_key_press,
+		tt_paste => \&cb_tt_paste
+	);
 
-    if ( !$X ) {
+    if ( !$self->{'X11'} ) {
         die("Failed to get X connection\n");
     }
-
-	push @{ $self->{term}{option_popup_hook} }, sub {
-	   ("broadcast" => $myoption, \&mode_toggle, \$self)
-   };
-
-	return ();
 }
+
+sub cb_disabled {
+	undef $self->{'X11'};
+	undef $self->{'i3'};
+	undef $self->{'cb_ref'};  # disable URxvt callbacks
+}
+
+sub overlay_message($$) {
+	my ($msg, $timeout) = @_;
+	#FIXME
+}
+
 
 sub send_event {
 	my %tgtevt = %{$_[0]}; shift;
 	my $twid = shift;
 	foreach my $target (@targets) {
 		$tgtevt{'event'}=$target;
-		my $event_string = $X->pack_event(%tgtevt);
-		print $X->SendEvent( $target, 0, $em, $event_string);
+		my $event_string = $self->{'X11'}->pack_event(%tgtevt);
+		print $self->{'X11'}->SendEvent( $target, 0, $em, $event_string);
 	}
-	$X->flush();
+	$self->{'X11'}->flush();
 	return 1;
 }
 
 sub debug {
 	return ();
 }
-sub load_keyboard_map() { my ($self) = @_; # load up the keyboard map to convert keysyms to keyboardmap
-    my $min      = $X->{min_keycode};
-    my $count    = $X->{max_keycode} - $min;
-    my @keyboard = $X->GetKeyboardMapping( $min, $count );
+
+sub load_keyboard_map() {
+    my $min      = $self->{'X11'}->{min_keycode};
+    my $count    = $self->{'X11'}->{max_keycode} - $min;
+    my @keyboard = $self->{'X11'}->GetKeyboardMapping( $min, $count );
 
     # @keyboard arry
     #  0 = plain key
@@ -302,7 +280,7 @@ SWITCH: for ($state) {
     return ( $state, $code );
 }
 
-sub on_tt_paste {
+sub cb_tt_paste {
 	my ($term, $octets) = @_;
 	foreach my $char (split(//, $octets)) {
         next if ( !defined($char) );
@@ -319,67 +297,96 @@ sub on_tt_paste {
 		#print("keysym:", Dumper($char, $keysym, $ord, $keycodetosym{$ord}, $keycode));
 		#print("\n");
         my ( $state, $code ) = get_keycode_state($keysym);
-		my %tgtevt;
+		$s++;
+		my %tgtevt = (
+			'name'        => 'KeyPress',
+			'detail'      => $code,
+			'state'       => $state,
+			'same_screen' => 1,
+			'root'        => $self->{'X11'}->{'root'},
+			'child'       => 'None',
+			'time'        => time(),
+			'sequence_number' => $s
+		);
 
-		$tgtevt{'name'} = 'KeyPress';
-		$tgtevt{'detail'} = $code,
-		$tgtevt{'state'} = $state,
-		$tgtevt{'same_screen'} = 1,
-		$tgtevt{'root'} = $X->{'root'};
-		$tgtevt{'child'}        = 'None';
-		$tgtevt{'time'} = time();
-		$s+=1;
-		$tgtevt{'sequence_number'} = $s;
 		send_event(\%tgtevt);
 	}
 
-	return 1;
+	return 1 if $self->{'block_input'};
+	return 0;
 }
 
-sub on_key_release {
+sub cb_key_press {
 	my ($term, $event, $keysym, $octets) = @_;
-	my %tgtevt;
-
-	$tgtevt{'name'} = 'KeyRelease';
-	$tgtevt{'detail'} = %$event{'keycode'};
-	$tgtevt{'state'} = %$event{'state'};
-	$tgtevt{'code'} = 2;#%$event{'type'};
-	$tgtevt{'event_x'} = %$event{'x'};
-	$tgtevt{'event_y'} = %$event{'y'};
-	$tgtevt{'same_screen'} = 1,
-	$tgtevt{'root'} = $X->{'root'};
-	$tgtevt{'child'}        = 'None';
-	$tgtevt{'time'} = time();
-	$tgtevt{'root_x'} = %$event{'x_root'};
-	$tgtevt{'root_y'} = %$event{'y_root'};
 	$s+=1;
-	$tgtevt{'sequence_number'} = $s;
-
-	#send_event(\%tgtevt);
-}
-
-sub on_key_press {
-	my ($term, $event, $keysym, $octets) = @_;
-	my %tgtevt;
-
-	$tgtevt{'name'} = 'KeyPress';
-	$tgtevt{'detail'} = %$event{'keycode'};
-	$tgtevt{'state'} = %$event{'state'};
-	$tgtevt{'code'} = 2;#%$event{'type'};
-	$tgtevt{'event_x'} = %$event{'x'};
-	$tgtevt{'event_y'} = %$event{'y'};
-	$tgtevt{'same_screen'} = 1,
-	$tgtevt{'root'} = $X->{'root'};
-	$tgtevt{'child'}        = 'None';
-	$tgtevt{'time'} = time();
-	$tgtevt{'root_x'} = %$event{'x_root'};
-	$tgtevt{'root_y'} = %$event{'y_root'};
-	$s+=1;
-	$tgtevt{'sequence_number'} = $s;
-	#$tgtevt{'sequence_number'} = %$event{'serial'};
+	my %tgtevt = (
+		'name'        => 'KeyPress',
+		'detail'      => $$event{'keycode'},
+		'state'       => $$event{'state'},
+		'same_screen' => 1,
+		'root'        => $self->{'X11'}->{'root'},
+		'child'       => 'None',
+		'time'        => time(),
+		'sequence_number' => $s
+#		'code'        => 2,#%$event{'type'},
+#		'event_x'     => %$event{'x'},
+#		'event_y'     => %$event{'y'},
+#		'root_x'      => %$event{'x_root'},
+#		'root_y'      => %$event{'y_root'},
+	);
 
 	send_event(\%tgtevt);
-	#send_event(\%tgtevt);
 
-    return 1;
+	return 1 if $self->{'block_input'};
+	return 0;
 }
+
+sub cb_toggle_block_input($) {
+	$self->{'block_input'} = $_[0];
+}
+
+sub on_init {
+	my ($self) = @_;
+	$self->{block_input}=1;
+    $self->{broadcast_enabled}=0;
+	@target_instances=split(',',$self->x_resource("%.target_instances" || 'urxvt,wssh'));
+
+	push @{ $self->{term}{option_popup_hook} }, sub {
+		(
+			"broadcast enabled" => $self->{broadcast_enabled}, sub {
+				$self->{broadcast_enabled} = shift;
+				if ($self->{broadcast_enabled}) {
+					cb_enabled($self);
+				} else {
+					cb_disabled($self);
+				};
+			}
+		)
+	}, sub {
+	   (
+		   "broadcast disable input" => $self->{block_input}, sub {
+				$self->{block_input} = shift;
+			}
+		)
+		#}\&cb_toggle_block_input)
+	};
+
+	()
+}
+
+sub on_start {
+	($self) = @_;
+
+	print("i3b started\n");
+	print "self: ", $self, "\n";
+	print "term ", $self->{term}, "\n";
+	print "parent: ", $self->parent, "\n";
+	print "vt: ", $self->vt, "\n";
+
+	()
+}
+
+sub on_destroy {
+	cb_disabled();
+}
+
